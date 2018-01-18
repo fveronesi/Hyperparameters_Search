@@ -1,0 +1,67 @@
+#Install and load libraries
+install.packages(c("mlbench","dismo","gbm","parallel","doParallel","caret","Metrics"))
+
+library(mlbench)
+library(dismo)
+library(gbm)
+library(parallel)
+library(doParallel)
+library(caret)
+library(Metrics)
+
+#Load sample dataset
+data(BostonHousing)
+head(BostonHousing)
+
+Predictors.Columns = 1:13
+Target.Variable = 14
+
+
+
+#GBM
+TR.HYPER = expand.grid(learning.rate=c(0.1, 0.01, 0.001), bag.fraction=c(0.75, 0.8, 0.9), tree.complexity=c(1, 5), n.trees=c(500, 1000, 2500))
+
+
+
+gbm.hyper = function(Data=NULL, Hyperparameters=NULL, Y.index=NULL, X.indexes=NULL, nFolds=3){
+  #require(caret)
+  data_folds <- createFolds(1:nrow(Data), k=nFolds)
+  
+  RES = c()
+  for(fold in 1:nFolds){
+    
+    TR <- Data[-data_folds[[fold]],]
+    TE <- Data[data_folds[[fold]],]
+    
+    
+    GBM.mod = gbm.fixed(data=TR, gbm.x=X.indexes, gbm.y=Y.index, family="gaussian", learning.rate=Hyperparameters[1], bag.fraction=Hyperparameters[2], tree.complexity = Hyperparameters[3], n.trees = Hyperparameters[4], verbose=F)
+    
+    RES = append(RES, mae(predict(GBM.mod, newdata=TE, n.trees=Hyperparameters[4]), TE[,Y.index]))
+    
+  }
+  
+  return(mean(RES, na.rm=T))
+}
+
+
+
+
+
+cluster <- makeCluster(detectCores() - 1) #Leave 1 core for OS
+registerDoParallel(cluster)
+clusterEvalQ(cl=cluster, library(dismo))
+clusterEvalQ(cl=cluster, library(gbm))
+clusterEvalQ(cl=cluster, library(caret))
+clusterEvalQ(cl=cluster, library(Metrics))
+clusterExport(cl=cluster, c("BostonHousing", "Predictors.Columns", "Target.Variable", "gbm.hyper"))
+
+
+RES_GBM = parApply(cluster, TR.HYPER, 1, function(x){gbm.hyper(Data=BostonHousing, Hyperparameters = x, Y.index = Target.Variable, X.indexes = Predictors.Columns)})
+
+
+stopCluster(cluster)
+registerDoSEQ()
+
+TR.HYPER$MAE = RES_GBM
+
+TR.HYPER[order(TR.HYPER$MAE),]
