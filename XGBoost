@@ -1,0 +1,68 @@
+#Install and load libraries
+install.packages(c("mlbench","xgboost","parallel","doParallel","caret","Metrics"))
+
+library(mlbench)
+library(xgboost)
+library(parallel)
+library(doParallel)
+library(caret)
+library(Metrics)
+
+#Load sample dataset
+data(BostonHousing)
+head(BostonHousing)
+
+#XGboost does not work with factorial variables
+#Theoretically we should create dummies for chas, but for this demo it is sufficient to just turn it into numeric format
+BostonHousing$chas = as.numeric(BostonHousing$chas)
+
+Predictors.Columns = 1:13
+Target.Variable = 14
+
+
+#XGBOOST
+TR.HYPER = expand.grid(eta=c(0.5, 0.7), gamma=c(0, 5), max_depth=c(3, 6), min_child_weight=c(1, 5), subsample=c(0.75, 1),colsample_bytree=c(0.75, 1), nrounds=c(500, 1000))
+
+
+xgb.hyper = function(Data=NULL, Hyper=NULL, Y.index=NULL, X.indexes=NULL, nFolds=3){
+  #require(caret)
+  data_folds <- createFolds(1:nrow(Data), k=nFolds)
+  
+  RES = c()
+  for(fold in 1:nFolds){
+    
+    TR <- Data[-data_folds[[fold]],]
+    TE <- Data[data_folds[[fold]],]
+    
+    XG.data = xgb.DMatrix(as.matrix(TR[,X.indexes]), label=TR[,Y.index])
+    
+    XG.mod = xgboost(XG.data, params=list(eta=Hyper[1], gamma=Hyper[2], max_depth=Hyper[3], min_child_weight=Hyper[4], subsample=Hyper[5], colsample_bytree=Hyper[6]), nrounds=Hyper[7], verbose=0)
+    
+    XG.test = xgb.DMatrix(as.matrix(TE), label=TE[,Y.index])
+    
+    PRED_XG = predict(XG.mod, newdata=XG.test)
+    
+    RES = append(RES, mae(PRED_XG, TE[,Y.index]))
+    
+  }
+  
+  return(mean(RES, na.rm=T))
+}
+
+
+
+cluster <- makeCluster(detectCores() - 1) #Leave 1 core for OS
+registerDoParallel(cluster)
+clusterEvalQ(cl=cluster, library(xgboost))
+clusterEvalQ(cl=cluster, library(caret))
+clusterEvalQ(cl=cluster, library(Metrics))
+clusterExport(cl=cluster, c("BostonHousing", "Predictors.Columns", "Target.Variable", "xgb.hyper"))
+
+RES_XGB = parApply(cluster, TR.HYPER, 1, function(x){xgb.hyper(Data=BostonHousing, Hyper = x, Y.index = Target.Variable, X.indexes = Predictors.Columns)})
+
+stopCluster(cluster)
+registerDoSEQ()
+
+TR.HYPER$MAE = RES_XGB
+
+TR.HYPER[order(TR.HYPER$MAE),]
